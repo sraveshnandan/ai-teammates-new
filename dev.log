@@ -1,0 +1,12 @@
+
+> ai-teammates@0.0.1 dev
+> next dev
+
+▲ Next.js 16.3.4 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.31.10:3000
+- Environments: .env.local
+✓ Ready in 157ms
+✓ Running next.config.ts took 17ms
+
+[?25h

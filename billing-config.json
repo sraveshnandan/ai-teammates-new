@@ -1,0 +1,46 @@
+{
+  "billing": {
+    "features": {
+      "bots": {
+        "name": "Bots",
+        "description": "Create and manage AI teammates"
+      },
+      "sandboxes": {
+        "name": "Sandboxes",
+        "description": "Cloud computers for your teammates"
+      }
+    },
+    "free_trial_requires_payment_method": true,
+    "organization_enabled": false,
+    "plans": {
+      "free_user": {
+        "amount": 0,
+        "annual_monthly_amount": 0,
+        "currency": "usd",
+        "description": "Free tier",
+        "features": [],
+        "free_trial_days": null,
+        "free_trial_enabled": false,
+        "is_recurring": true,
+        "name": "Free",
+        "payer_type": "user",
+        "publicly_visible": true
+      },
+      "pro_user": {
+        "amount": 2000,
+        "annual_monthly_amount": 1600,
+        "currency": "usd",
+        "description": "Full access to AI teammates and sandboxes",
+        "features": ["bots", "sandboxes"],
+        "free_trial_days": 7,
+        "free_trial_enabled": true,
+        "is_recurring": true,
+        "name": "Pro",
+        "payer_type": "user",
+        "publicly_visible": true
+      }
+    },
+    "user_enabled": true
+  },
+  "config_version": "v1_8efe4cc7"
+}
