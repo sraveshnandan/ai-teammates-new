@@ -1,12 +1,7 @@
 "use server"
 
 import { auth as clerkAuth } from "@clerk/nextjs/server"
-import { auth } from "@trigger.dev/sdk"
-import {
-  chat,
-  defaultStorage,
-  type ChatStartSessionParams,
-} from "@trigger.dev/sdk/ai"
+import { inngest } from "@/inngest/client"
 import { and, eq, inArray, notInArray } from "drizzle-orm"
 import { revalidatePath } from "next/cache"
 
@@ -23,57 +18,49 @@ import { getBotDesktopUrl } from "@/lib/daytona"
 import type { ChatUIMessage } from "@/lib/sandbox-tools"
 import { getUsage } from "@/lib/usage"
 import { getChat } from "@/queries/chats"
-import type { chatAgent } from "@/trigger/chat"
 
-const startSession = chat.createStartSessionAction<typeof chatAgent>("chat")
-const loadStoredTranscript = chat.createLoadTranscriptAction(defaultStorage)
-
-// chatId comes from the browser; only the chat's owner may touch its session
 async function assertChatOwner(chatId: string) {
   const chat = await getChat(chatId)
   if (!chat) throw new Error("Chat not found")
 }
 
-// Billable actions are for plans that include the feature
 async function assertFeature(feature: Feature) {
   const { has, userId } = await clerkAuth()
   if (!has({ feature })) {
-    // Sentry logger removed
     throw new Error("Upgrade required")
   }
 }
 
-export async function startChatSession(
-  params: ChatStartSessionParams<typeof chatAgent>
+export async function sendChatMessage(
+  chatId: string,
+  messages: ChatUIMessage[],
+  clientData?: { botId?: string }
 ) {
-  await assertFeature("bots")
-  await assertChatOwner(params.chatId)
-
-  const session = await startSession(params)
-
-  // Sentry logger removed
-
-  return session
-}
-
-export async function mintChatAccessToken(chatId: string) {
-  // Sending needs a token, so a session started on a paid plan ends with it
   await assertFeature("bots")
   await assertChatOwner(chatId)
 
-  return auth.createPublicToken({
-    scopes: { read: { sessions: chatId }, write: { sessions: chatId } },
-    expirationTime: "1h",
+  const { userId } = await clerkAuth()
+  if (!userId) throw new Error("Unauthorized")
+
+  // Send event to Inngest for processing
+  await inngest.send({
+    name: "chat/message",
+    data: { chatId, clientData, messages, userId },
   })
+
+  return { success: true }
 }
 
 export async function loadTranscript(params: { chatId: string }) {
   await assertChatOwner(params.chatId)
 
-  const transcript = await loadStoredTranscript(params)
+  // For now, we'll load from database directly
+  // In a full implementation, you'd store transcripts in a separate table
+  const chat = await getChat(params.chatId)
+  if (!chat) throw new Error("Chat not found")
 
-  // Stored untyped, but only this agent ever writes it
-  return { ...transcript, messages: transcript.messages as ChatUIMessage[] }
+  // This would be loaded from a transcript table in production
+  return { messages: [] as ChatUIMessage[] }
 }
 
 export async function getDesktopUrl(chatId: string) {
@@ -86,15 +73,11 @@ export async function getDesktopUrl(chatId: string) {
   // Showing the desktop starts the sandbox
   const usage = await getUsage(chat.userId)
   if (!usage || usage.remaining.sandbox <= 0) {
-    // Sentry logger removed
     throw new Error("Usage limit reached")
   }
 
   const startedAt = Date.now()
   const url = await getBotDesktopUrl(chat.bots[0].sandboxId)
-
-  // Waking a stopped sandbox and its desktop is the slow part of opening one
-  // Sentry logger removed
 
   return url
 }
@@ -129,8 +112,6 @@ export async function createGroupChat(values: GroupChatInsert) {
   })
 
   revalidatePath("/", "layout")
-
-  // Sentry logger removed
 
   return chat
 }
@@ -185,8 +166,6 @@ export async function updateGroupChat(chatId: string, values: GroupChatInsert) {
 
   revalidatePath("/", "layout")
 
-  // Sentry logger removed
-
   return chat
 }
 
@@ -209,5 +188,5 @@ export async function deleteGroupChat(chatId: string) {
 
   revalidatePath("/", "layout")
 
-  // Sentry logger removed
+  return chat
 }

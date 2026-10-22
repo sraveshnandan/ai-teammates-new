@@ -1,19 +1,9 @@
 "use client"
 
 import { useChat } from "@ai-sdk/react"
-import type { TriggerChatTransport } from "@trigger.dev/sdk/chat"
-import {
-  useLoadTranscript,
-  useTriggerChatTransport,
-} from "@trigger.dev/sdk/chat/react"
+import { DefaultChatTransport } from "ai"
 import { isToolUIPart } from "ai"
 import { useState } from "react"
-
-import {
-  loadTranscript,
-  mintChatAccessToken,
-  startChatSession,
-} from "@/actions/chat"
 
 import { ChatAvatar } from "@/components/chat-avatar"
 import { CodeBlock } from "@/components/ai-elements/code-block"
@@ -53,9 +43,13 @@ import type { Bot } from "@/db/schema"
 import { USAGE_LIMIT_ERROR } from "@/lib/billing"
 import { usePaywall } from "@/hooks/use-paywall"
 import type { ChatUIMessage } from "@/lib/sandbox-tools"
-import type { chatAgent } from "@/trigger/chat"
 
 type ChatBot = Pick<Bot, "id" | "name" | "avatar">
+
+const transport = new DefaultChatTransport<ChatUIMessage>({
+  api: "/api/chat",
+  body: { chatId: "" }, // Will be overridden per request
+})
 
 type ToolPart = Extract<
   ChatUIMessage["parts"][number],
@@ -195,48 +189,11 @@ function splitByAuthor(message: ChatUIMessage, bots: ChatBot[]) {
 }
 
 // `bots` are a group chat's members to pick from; a direct chat passes none
-function Chat({ chatId, bots }: { chatId: string; bots?: ChatBot[] }) {
-  const transport = useTriggerChatTransport<typeof chatAgent>({
-    task: "chat",
-    accessToken: ({ chatId }) => mintChatAccessToken(chatId),
-    startSession: ({ chatId, clientData }) =>
-      startChatSession({ chatId, clientData }),
-  })
-  const { messages, isLoading } = useLoadTranscript(chatId, loadTranscript, {
-    transport,
-  })
-
-  // useChat only reads its initial messages on mount, so wait for the transcript
-  if (isLoading) return null
-
-  return (
-    <ChatMessages
-      key={chatId}
-      chatId={chatId}
-      bots={bots}
-      initialMessages={messages}
-      transport={transport}
-    />
-  )
-}
-
-function ChatMessages({
-  chatId,
-  bots = [],
-  initialMessages,
-  transport,
-}: {
-  chatId: string
-  bots?: ChatBot[]
-  initialMessages: ChatUIMessage[]
-  transport: TriggerChatTransport
-}) {
+function Chat({ chatId, bots = [] }: { chatId: string; bots?: ChatBot[] }) {
   const { checkPlan, showUsageLimit } = usePaywall()
-  const { messages, sendMessage, status, stop } = useChat<ChatUIMessage>({
+  const { messages, sendMessage, status, stop, error } = useChat<ChatUIMessage>({
     id: chatId,
-    messages: initialMessages,
     transport,
-    // The agent refuses a turn once the period's allowance is spent
     onError: (error) => {
       if (error.message === USAGE_LIMIT_ERROR) return showUsageLimit("ai")
 
@@ -256,7 +213,7 @@ function ChatMessages({
     // The agent reads this turn's metadata to decide which bot answers
     // and the message keeps it too, to show who it was for
     const metadata = selectedBot && { botId: selectedBot.id }
-    sendMessage({ text: message.text, metadata }, { metadata })
+    sendMessage({ text: message.text, metadata }, { body: { chatId, clientData: metadata } })
   }
 
   return (

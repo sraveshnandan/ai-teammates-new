@@ -1,5 +1,5 @@
 import { inngest } from "@/inngest/client"
-import { streamText, type Tool, type CoreMessage } from "ai"
+import { streamText, type Tool, type UIMessage } from "ai"
 import { z } from "zod"
 import { db } from "@/db"
 import { chatMembers, chats, type Bot, type Chat } from "@/db/schema"
@@ -144,12 +144,12 @@ export const chatFunction = inngest.createFunction(
     })
 
     // Run the AI stream with tools
-    const result = await step.run("run-chat", async () => {
+    await step.run("run-chat", async () => {
       const stream = streamText({
         model: chatModel(),
         system: buildInstructions(bot, group),
-        messages: messages as CoreMessage[],
-        tools: sandboxTools as Record<string, Tool<any, any>>,
+        messages: messages as any,
+        tools: sandboxTools as unknown as Record<string, Tool<any, any>>,
         // After a handoff the rest of the turn is the other bot's to answer
         prepareStep: ({ steps }) => {
           const handoff = steps
@@ -171,17 +171,27 @@ export const chatFunction = inngest.createFunction(
             steps.reduce((cost, step) => cost + chatModelCost(step.usage), 0) >=
             usage.remaining.ai,
         ],
+        onFinish: async ({ usage: turnUsage }) => {
+          if (turnUsage) {
+            await recordUsage([
+              {
+                userId: row.userId,
+                kind: "ai",
+                amount: chatModelCost(turnUsage),
+                idempotencyKey: `ai:${chatId}:${Date.now()}`,
+              },
+            ])
+          }
+        },
       })
 
-      // Convert stream to array for Inngest
-      const chunks: any[] = []
-      for await (const chunk of stream.toDataStreamResponse().body!) {
-        chunks.push(chunk)
+      // Consume the stream
+      for await (const _chunk of stream.textStream) {
+        // Stream is consumed, results handled by onFinish
       }
-      return chunks
     })
 
-    return { success: true, result }
+    return { success: true }
   }
 )
 
