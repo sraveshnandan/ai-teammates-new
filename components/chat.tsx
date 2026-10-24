@@ -42,7 +42,9 @@ import { Badge } from "@/components/ui/badge"
 import type { Bot } from "@/db/schema"
 import { USAGE_LIMIT_ERROR } from "@/lib/billing"
 import { usePaywall } from "@/hooks/use-paywall"
+import { toast } from "@/components/ui/toast"
 import type { ChatUIMessage } from "@/lib/sandbox-tools"
+import { Spinner } from "@/components/ui/spinner"
 
 type ChatBot = Pick<Bot, "id" | "name" | "avatar">
 
@@ -196,9 +198,11 @@ function Chat({ chatId, bots = [] }: { chatId: string; bots?: ChatBot[] }) {
     transport,
     onError: (error) => {
       if (error.message === USAGE_LIMIT_ERROR) return showUsageLimit("ai")
-
-      // Handled here, so nothing else tells us a reply never arrived
-      // Sentry logger removed
+      toast.add({
+        type: "error",
+        title: "Failed to send message",
+        description: error.message ?? "An unexpected error occurred.",
+      })
     },
   })
   // The bot the next message goes to, in a group chat
@@ -220,6 +224,12 @@ function Chat({ chatId, bots = [] }: { chatId: string; bots?: ChatBot[] }) {
     <div data-slot="chat" className="flex min-h-0 flex-1 flex-col">
       <Conversation>
         <ConversationContent className="mx-auto w-full max-w-3xl">
+          {(status === "submitted" || status === "streaming") && (
+            <div className="flex items-center gap-2 p-4 text-muted-foreground">
+              <Spinner className="size-4" />
+              <span>{status === "streaming" ? "Generating response…" : "Thinking…"}</span>
+            </div>
+          )}
           {messages.flatMap((message) => {
             // The bot a group chat's message was sent to
             const addressee =

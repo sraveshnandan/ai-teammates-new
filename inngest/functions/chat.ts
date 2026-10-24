@@ -2,7 +2,7 @@ import { inngest } from "@/inngest/client"
 import { streamText, type Tool, type UIMessage, type ModelMessage } from "ai"
 import { z } from "zod"
 import { db } from "@/db"
-import { chatMembers, chats, type Bot, type Chat } from "@/db/schema"
+import { chatMembers, chats, chatTranscripts, type Bot, type Chat } from "@/db/schema"
 import { USAGE_LIMIT_ERROR } from "@/lib/billing"
 import { MEMORY_FILE } from "@/lib/daytona"
 import { createHandoffTool, type Handoff } from "@/lib/handoff-tool"
@@ -108,7 +108,12 @@ export const chatFunction = inngest.createFunction(
   { id: "chat", name: "Chat Agent" },
   { event: "chat/message" },
   async ({ event, step }) => {
-    const { chatId, clientData, messages, userId } = event.data
+    const { chatId, clientData, messages, userId, source } = event.data
+
+    // When triggered from the /api/chat HTTP route, the AI turn already ran
+    // there and streamed to the client. Only run AI here for server-action
+    // triggered events (sendChatMessage), which have no source or a different one.
+    if (source === "http") return { success: true, skipped: true }
 
     // Read every turn, so edits to the bots apply to the next message
     const {
@@ -166,6 +171,7 @@ export const chatFunction = inngest.createFunction(
     })
 
     // Run the AI stream with tools
+    let assistantReply = ""
     await step.run("run-chat", async () => {
       const stream = streamText({
         model: chatModel(),
@@ -193,7 +199,32 @@ export const chatFunction = inngest.createFunction(
             steps.reduce((cost, step) => cost + chatModelCost(step.usage), 0) >=
             usage.remaining.ai,
         ],
+        onStepFinish: ({ text }) => {
+          assistantReply += text
+        },
         onFinish: async ({ usage: turnUsage }) => {
+          // Persist the assistant's reply to the transcript
+          if (assistantReply) {
+            const existing = await db.query.chatTranscripts.findFirst({
+              where: eq(chatTranscripts.chatId, chatId),
+            })
+            const updated: ChatUIMessage[] = existing
+              ? (JSON.parse(existing.messages) as ChatUIMessage[])
+              : messages
+            updated.push({
+              id: crypto.randomUUID(),
+              role: "assistant",
+              parts: [{ type: "text", text: assistantReply }],
+            } as ChatUIMessage)
+            await db
+              .insert(chatTranscripts)
+              .values({ chatId, messages: JSON.stringify(updated) })
+              .onConflictDoUpdate({
+                target: chatTranscripts.chatId,
+                set: { messages: JSON.stringify(updated), updatedAt: new Date() },
+              })
+          }
+
           if (turnUsage) {
             await recordUsage([
               {

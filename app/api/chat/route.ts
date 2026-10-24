@@ -1,15 +1,18 @@
 import { auth as clerkAuth } from "@clerk/nextjs/server"
 import { streamText, type ModelMessage, type UIMessage } from "ai"
 import { db } from "@/db"
-import { chatMembers, chats, type Bot, type Chat } from "@/db/schema"
+import { chatMembers, chats, chatTranscripts, type Bot, type Chat } from "@/db/schema"
 import { USAGE_LIMIT_ERROR } from "@/lib/billing"
 import { MEMORY_FILE } from "@/lib/daytona"
 import { createHandoffTool, type Handoff } from "@/lib/handoff-tool"
 import { chatModel, chatModelCost } from "@/lib/model"
 import { createSandboxTools, type ChatUIMessage } from "@/lib/sandbox-tools"
 import { getUsage, recordUsage } from "@/lib/usage"
+import { inngest } from "@/inngest/client"
 import { asc, eq } from "drizzle-orm"
 import { isStepCount } from "ai"
+
+export const dynamic = "force-dynamic"
 
 function convertToModelMessages(messages: UIMessage[]): ModelMessage[] {
   return messages.map((msg) => {
@@ -96,17 +99,23 @@ function buildInstructions(bot: Bot, group?: { chat: Chat; bots: Bot[] }) {
 export async function POST(req: Request) {
   try {
     const { isAuthenticated, userId } = await clerkAuth()
-    if (!isAuthenticated) {
+    if (!isAuthenticated || !userId) {
       return new Response("Unauthorized", { status: 401 })
     }
 
     const { chatId, messages, clientData } = await req.json()
 
+    // Parallelize independent lookups
+    const [chatResult, usageResult] = await Promise.all([
+      getChatBots(chatId, clientData?.botId),
+      getUsage(userId),
+    ])
+
     const {
       chat: row,
       bots,
       bot,
-    } = await getChatBots(chatId, clientData?.botId)
+    } = chatResult
 
     // Verify ownership
     if (row.userId !== userId) {
@@ -116,7 +125,7 @@ export async function POST(req: Request) {
     const group = row.kind === "group" ? { chat: row, bots } : undefined
 
     // Every turn, as a session outlives the plan it was started on
-    const usage = await getUsage(row.userId)
+    const usage = usageResult
     if (!usage || usage.remaining.ai <= 0) {
       return new Response(USAGE_LIMIT_ERROR, { status: 402 })
     }
@@ -158,6 +167,11 @@ export async function POST(req: Request) {
           }),
         }
 
+    // Accumulate the assistant's reply across steps so we can persist it
+    let assistantReply = ""
+
+    // Start the AI stream immediately — this returns a stream object without
+    // waiting for generation, so the client gets the first chunk sooner
     const stream = streamText({
       model: chatModel(),
       system: buildInstructions(bot, group),
@@ -181,7 +195,31 @@ export async function POST(req: Request) {
           steps.reduce((cost, step) => cost + chatModelCost(step.usage), 0) >=
           usage.remaining.ai,
       ],
+      onStepFinish: ({ text }) => {
+        assistantReply += text
+      },
       onFinish: async ({ usage: turnUsage }) => {
+        // Save user message + assistant reply to the transcript
+        const updated: ChatUIMessage[] = [
+          ...messages,
+          ...(assistantReply
+            ? [
+                {
+                  id: crypto.randomUUID(),
+                  role: "assistant",
+                  parts: [{ type: "text", text: assistantReply }],
+                } as ChatUIMessage,
+              ]
+            : []),
+        ]
+        await db
+          .insert(chatTranscripts)
+          .values({ chatId, messages: JSON.stringify(updated) })
+          .onConflictDoUpdate({
+            target: chatTranscripts.chatId,
+            set: { messages: JSON.stringify(updated), updatedAt: new Date() },
+          })
+
         if (turnUsage) {
           await recordUsage([
             {
@@ -192,12 +230,57 @@ export async function POST(req: Request) {
             },
           ])
         }
+
+        // Trigger Inngest for background processing (usage metering, sandbox lifecycle, etc.)
+        await inngest.send({
+          name: "chat/message",
+          data: { chatId, clientData, messages, userId: row.userId, source: "http" },
+        })
       },
     })
 
     return stream.toUIMessageStreamResponse()
   } catch (error) {
     console.error("Chat error:", error)
+    return new Response("Internal Server Error", { status: 500 })
+  }
+}
+
+export async function GET(req: Request) {
+  try {
+    const { isAuthenticated, userId } = await clerkAuth()
+    if (!isAuthenticated) {
+      return new Response("Unauthorized", { status: 401 })
+    }
+
+    const { searchParams } = new URL(req.url)
+    const chatId = searchParams.get("id")
+    if (!chatId) {
+      return new Response("Missing chat id", { status: 400 })
+    }
+
+    const transcript = await db.query.chatTranscripts.findFirst({
+      where: eq(chatTranscripts.chatId, chatId),
+    })
+    if (!transcript) {
+      return new Response(JSON.stringify({ messages: [] }), {
+        headers: { "content-type": "application/json" },
+      })
+    }
+
+    const chat = await db.query.chats.findFirst({
+      where: eq(chats.id, chatId),
+    })
+    if (!chat || chat.userId !== userId) {
+      return new Response("Forbidden", { status: 403 })
+    }
+
+    const messages = JSON.parse(transcript.messages) as ChatUIMessage[]
+    return new Response(JSON.stringify({ messages }), {
+      headers: { "content-type": "application/json" },
+    })
+  } catch (error) {
+    console.error("Chat GET error:", error)
     return new Response("Internal Server Error", { status: 500 })
   }
 }

@@ -84,7 +84,7 @@ export const chatTranscripts = pgTable(
       .$defaultFn(() => nanoid()),
     chatId: text()
       .notNull()
-      .references(() => chats.id, { onDelete: "cascade" }),
+      .unique(),
     // The full message array as JSON
     messages: text().notNull(),
     createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
