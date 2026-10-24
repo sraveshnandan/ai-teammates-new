@@ -1,5 +1,5 @@
 import { auth as clerkAuth } from "@clerk/nextjs/server"
-import { streamText } from "ai"
+import { streamText, type ModelMessage, type UIMessage } from "ai"
 import { db } from "@/db"
 import { chatMembers, chats, type Bot, type Chat } from "@/db/schema"
 import { USAGE_LIMIT_ERROR } from "@/lib/billing"
@@ -10,6 +10,28 @@ import { createSandboxTools, type ChatUIMessage } from "@/lib/sandbox-tools"
 import { getUsage, recordUsage } from "@/lib/usage"
 import { asc, eq } from "drizzle-orm"
 import { isStepCount } from "ai"
+
+function convertToModelMessages(messages: UIMessage[]): ModelMessage[] {
+  return messages.map((msg) => {
+    if (msg.role === "system") {
+      return { role: "system", content: (msg as any).content ?? "" }
+    }
+    if (msg.role === "user") {
+      const textParts = msg.parts.filter((p) => p.type === "text")
+      const content = textParts.map((p) => p.text).join("\n")
+      return { role: "user", content }
+    }
+    if (msg.role === "assistant") {
+      const textParts = msg.parts.filter((p) => p.type === "text")
+      const content = textParts.map((p) => p.text).join("\n")
+      return { role: "assistant", content }
+    }
+    if (msg.role === "tool") {
+      return { role: "tool", content: (msg as any).content ?? "" }
+    }
+    return { role: "user", content: "" }
+  })
+}
 
 const clientDataSchema = {
   botId: { type: "string", optional: true },
@@ -139,7 +161,7 @@ export async function POST(req: Request) {
     const stream = streamText({
       model: chatModel(),
       system: buildInstructions(bot, group),
-      messages,
+      messages: convertToModelMessages(messages),
       tools: tools as any,
       prepareStep: ({ steps }) => {
         const handoff = steps
@@ -173,7 +195,7 @@ export async function POST(req: Request) {
       },
     })
 
-    return stream.toTextStreamResponse()
+    return stream.toUIMessageStreamResponse()
   } catch (error) {
     console.error("Chat error:", error)
     return new Response("Internal Server Error", { status: 500 })

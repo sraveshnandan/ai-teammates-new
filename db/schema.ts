@@ -75,6 +75,24 @@ export const chatMembers = pgTable(
 
 export const usageKind = pgEnum("usage_kind", ["ai", "sandbox"])
 
+// Chat transcript storage
+export const chatTranscripts = pgTable(
+  "chat_transcripts",
+  {
+    id: text()
+      .primaryKey()
+      .$defaultFn(() => nanoid()),
+    chatId: text()
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }),
+    // The full message array as JSON
+    messages: text().notNull(),
+    createdAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp({ withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("chat_transcripts_chat_id_idx").on(table.chatId)]
+)
+
 // The usage ledger: one row per metered event, only ever added to. What a user
 // has used in a billing period is the sum of their rows since it started.
 export const usageEntries = pgTable(
@@ -117,6 +135,13 @@ export const chatMembersRelations = relations(chatMembers, ({ one }) => ({
   bot: one(bots, {
     fields: [chatMembers.botId],
     references: [bots.id],
+  }),
+}))
+
+export const chatTranscriptsRelations = relations(chatTranscripts, ({ one }) => ({
+  chat: one(chats, {
+    fields: [chatTranscripts.chatId],
+    references: [chats.id],
   }),
 }))
 
@@ -168,3 +193,6 @@ export type UsageKind = (typeof usageKind.enumValues)[number]
 export type NewUsageEntry = typeof usageEntries.$inferInsert
 export type ChatMember = typeof chatMembers.$inferSelect
 export type NewChatMember = typeof chatMembers.$inferInsert
+
+export type ChatTranscript = typeof chatTranscripts.$inferSelect
+export type NewChatTranscript = typeof chatTranscripts.$inferInsert

@@ -11,7 +11,8 @@
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "inngest:dev": "npx inngest-cli@latest dev"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.99",

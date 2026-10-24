@@ -10,6 +10,7 @@ import {
   bots,
   chatMembers,
   chats,
+  chatTranscripts,
   groupChatInsertSchema,
   type GroupChatInsert,
 } from "@/db/schema"
@@ -42,6 +43,15 @@ export async function sendChatMessage(
   const { userId } = await clerkAuth()
   if (!userId) throw new Error("Unauthorized")
 
+  // Save transcript to database
+  await db
+    .insert(chatTranscripts)
+    .values({ chatId, messages: JSON.stringify(messages) })
+    .onConflictDoUpdate({
+      target: chatTranscripts.chatId,
+      set: { messages: JSON.stringify(messages), updatedAt: new Date() },
+    })
+
   // Send event to Inngest for processing
   await inngest.send({
     name: "chat/message",
@@ -54,13 +64,11 @@ export async function sendChatMessage(
 export async function loadTranscript(params: { chatId: string }) {
   await assertChatOwner(params.chatId)
 
-  // For now, we'll load from database directly
-  // In a full implementation, you'd store transcripts in a separate table
-  const chat = await getChat(params.chatId)
-  if (!chat) throw new Error("Chat not found")
+  const transcript = await db.query.chatTranscripts.findFirst({
+    where: eq(chatTranscripts.chatId, params.chatId),
+  })
 
-  // This would be loaded from a transcript table in production
-  return { messages: [] as ChatUIMessage[] }
+  return { messages: transcript ? JSON.parse(transcript.messages) : [] as ChatUIMessage[] }
 }
 
 export async function getDesktopUrl(chatId: string) {

@@ -1,5 +1,5 @@
 import { inngest } from "@/inngest/client"
-import { streamText, type Tool, type UIMessage } from "ai"
+import { streamText, type Tool, type UIMessage, type ModelMessage } from "ai"
 import { z } from "zod"
 import { db } from "@/db"
 import { chatMembers, chats, type Bot, type Chat } from "@/db/schema"
@@ -11,6 +11,28 @@ import { createSandboxTools, type ChatUIMessage } from "@/lib/sandbox-tools"
 import { getUsage, recordUsage } from "@/lib/usage"
 import { asc, eq } from "drizzle-orm"
 import { isStepCount } from "ai"
+
+function convertToModelMessages(messages: UIMessage[]): ModelMessage[] {
+  return messages.map((msg) => {
+    if (msg.role === "system") {
+      return { role: "system", content: (msg as any).content ?? "" }
+    }
+    if (msg.role === "user") {
+      const textParts = msg.parts.filter((p) => p.type === "text")
+      const content = textParts.map((p) => p.text).join("\n")
+      return { role: "user", content }
+    }
+    if (msg.role === "assistant") {
+      const textParts = msg.parts.filter((p) => p.type === "text")
+      const content = textParts.map((p) => p.text).join("\n")
+      return { role: "assistant", content }
+    }
+    if (msg.role === "tool") {
+      return { role: "tool", content: (msg as any).content ?? "" }
+    }
+    return { role: "user", content: "" }
+  })
+}
 
 // Sent with each message. Missing in direct chats, and when the session starts.
 const clientDataSchema = z
@@ -148,7 +170,7 @@ export const chatFunction = inngest.createFunction(
       const stream = streamText({
         model: chatModel(),
         system: buildInstructions(bot, group),
-        messages: messages as any,
+        messages: convertToModelMessages(messages),
         tools: sandboxTools as unknown as Record<string, Tool<any, any>>,
         // After a handoff the rest of the turn is the other bot's to answer
         prepareStep: ({ steps }) => {
