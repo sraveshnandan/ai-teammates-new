@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react"
 import { DefaultChatTransport } from "ai"
 import { isToolUIPart } from "ai"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import { ChatAvatar } from "@/components/chat-avatar"
 import { CodeBlock } from "@/components/ai-elements/code-block"
@@ -193,7 +193,7 @@ function splitByAuthor(message: ChatUIMessage, bots: ChatBot[]) {
 // `bots` are a group chat's members to pick from; a direct chat passes none
 function Chat({ chatId, bots = [] }: { chatId: string; bots?: ChatBot[] }) {
   const { checkPlan, showUsageLimit } = usePaywall()
-  const { messages, sendMessage, status, stop, error } = useChat<ChatUIMessage>({
+  const { messages, sendMessage, status, stop, error, setMessages } = useChat<ChatUIMessage>({
     id: chatId,
     transport,
     onError: (error) => {
@@ -205,6 +205,20 @@ function Chat({ chatId, bots = [] }: { chatId: string; bots?: ChatBot[] }) {
       })
     },
   })
+  // Load the existing transcript so the chat shows its history on open and
+  // after reloads. `useChat` does not fetch messages by itself.
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/chat?id=${encodeURIComponent(chatId)}`)
+      .then(async (response) => {
+        if (!response.ok || cancelled) return
+        const { messages: loadedMessages } = await response.json()
+        if (!cancelled) setMessages(loadedMessages as ChatUIMessage[])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [chatId, setMessages])
   // The bot the next message goes to, in a group chat
   const [botId, setBotId] = useState(bots[0]?.id)
   // Falls back to the first one when the picked bot is removed from the group

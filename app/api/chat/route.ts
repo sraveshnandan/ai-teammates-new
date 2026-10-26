@@ -1,5 +1,5 @@
 import { auth as clerkAuth } from "@clerk/nextjs/server"
-import { streamText, type ModelMessage, type UIMessage } from "ai"
+import { convertToModelMessages, streamText } from "ai"
 import { db } from "@/db"
 import { chatMembers, chats, chatTranscripts, type Bot, type Chat } from "@/db/schema"
 import { USAGE_LIMIT_ERROR } from "@/lib/billing"
@@ -13,28 +13,6 @@ import { asc, eq } from "drizzle-orm"
 import { isStepCount } from "ai"
 
 export const dynamic = "force-dynamic"
-
-function convertToModelMessages(messages: UIMessage[]): ModelMessage[] {
-  return messages.map((msg) => {
-    if (msg.role === "system") {
-      return { role: "system", content: (msg as any).content ?? "" }
-    }
-    if (msg.role === "user") {
-      const textParts = msg.parts.filter((p) => p.type === "text")
-      const content = textParts.map((p) => p.text).join("\n")
-      return { role: "user", content }
-    }
-    if (msg.role === "assistant") {
-      const textParts = msg.parts.filter((p) => p.type === "text")
-      const content = textParts.map((p) => p.text).join("\n")
-      return { role: "assistant", content }
-    }
-    if (msg.role === "tool") {
-      return { role: "tool", content: (msg as any).content ?? "" }
-    }
-    return { role: "user", content: "" }
-  })
-}
 
 const clientDataSchema = {
   botId: { type: "string", optional: true },
@@ -170,12 +148,16 @@ export async function POST(req: Request) {
     // Accumulate the assistant's reply across steps so we can persist it
     let assistantReply = ""
 
+    // Convert UI messages to model messages, preserving tool calls and tool
+    // results so the model receives a complete conversation history
+    const modelMessages = await convertToModelMessages(messages, { tools })
+
     // Start the AI stream immediately — this returns a stream object without
     // waiting for generation, so the client gets the first chunk sooner
     const stream = streamText({
       model: chatModel(),
       system: buildInstructions(bot, group),
-      messages: convertToModelMessages(messages),
+      messages: modelMessages,
       tools: tools as any,
       prepareStep: ({ steps }) => {
         const handoff = steps
