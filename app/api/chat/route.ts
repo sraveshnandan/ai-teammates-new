@@ -104,7 +104,7 @@ export async function POST(req: Request) {
 
     // Every turn, as a session outlives the plan it was started on
     const usage = usageResult
-    if (!usage || usage.remaining.ai <= 0) {
+    if (usage && usage.remaining.ai <= 0) {
       return new Response(USAGE_LIMIT_ERROR, { status: 402 })
     }
 
